@@ -2,19 +2,18 @@ import time
 
 import math
 import numpy as np
-from scipy.integrate import solve_ivp
 import matplotlib.pyplot as plt
 
 #------------------- Parameters -------------------
 
 GRAVITY = 9.81
-VACUUM_PERMITTIVITY = 8.854e-12
+EPSILON_0 = 8.854e-12
 
 AIR_DENSITY = 1.225
 AIR_VISCOSITY = 18.6e-6
 
 AIR_FLOW_DIRECTION = np.array([0.0, -0.66])
-TOWER_CHARGE_DENSITY = 1e-4
+TOWER_CHARGE_DENSITY = 1e-3
 
 particle_density = 1200
 particle_diameter = 5e-6
@@ -22,126 +21,10 @@ particle_charge = 1e-18
 
 particle_mass = (math.pi/6) * particle_density * particle_diameter**3
 particle_volume = np.pi/6 * particle_diameter**3
-particle_area =  np.pi * particle_diameter**2 / 4
-
-#------------------- Simulation Function -------------------
-frame = 0
-def particle_simulation(t, Y):
-    global frame
-    frame += 1
-    #print(f"Time: {time.time()-start_time:.2f} (s) / Frame: {frame} / Simulation Time: t={t:.5f}")
-    if (frame % 1000 == 0):
-        print(f"Time: {time.time()-start_time:.2f} (s) / Frame: {frame} / Completion: {100 * t/simulation_time:.2f}%")
-    dYdt = np.zeros_like(Y)
-    for i in range(N):
-        
-        index = i*4
-        x, y, vx, vy = Y[index:index+4]
-
-        # prevent moving at x = 0
-        if x <= 0:
-            dYdt[index:index+4] = [0, 0, 0, 0]
-            continue
-
-        velocity = np.array([vx, vy])
-        v_app = velocity - AIR_FLOW_DIRECTION
-        v_mag = np.linalg.norm(v_app) + 1e-12
-        
-        # gravity
-        gravity_force = np.array([0, - particle_mass * GRAVITY])
-        
-        # buoyancy
-        buoyancy_force = np.array([0, AIR_DENSITY * particle_volume * GRAVITY])
-        
-        # drag
-        reynolds_number = max(AIR_DENSITY * particle_diameter * v_mag / AIR_VISCOSITY, 1e-12)
-        Cd = 24 / reynolds_number
-        drag_mag = 0.5 * AIR_DENSITY * Cd * particle_area * v_mag**2
-        drag_force = -drag_mag * v_app / v_mag
-        
-        # electric plate_force
-        electric_plate_force = np.array([- particle_charge * TOWER_CHARGE_DENSITY / (2 * VACUUM_PERMITTIVITY), 0])
-        
-        # electric cloud force
-        #electric_cloud_force = 
-
-        total_force = gravity_force + buoyancy_force + drag_force + electric_plate_force
-        acceleration = total_force / particle_mass
-        
-        # prevent going below ground
-        if y < 0:
-            y = 0
-            if vy < 0:
-                vy = 0
-        
-        dYdt[index:index+4] = [vx, vy, acceleration[0], acceleration[1]]
-
-    return dYdt
-
-#------------------- Run -------------------
-
-Y0 = []
-N = 0
-for i in range(1, 15):
-    for j in range(1, 11):
-        x0 = j * 0.1
-        y0 = i / 2
-        vx0 = 0
-        vy0 = -0.66
-        Y0.extend([x0, y0, vx0, vy0])
-        N += 1
-
-start_time = time.time()
-
-'''
-Y0 = [0.5, 7, 0, -0.66]
-N = 1
-
-Y0 = np.array(Y0)
-
-simulation_time = 20 # seconds
-
-t_span = (0, simulation_time)
-t_eval = np.linspace(0, simulation_time, 2000)
-
-start_time = time.time()
-solution = solve_ivp(
-    particle_simulation,
-    t_span,
-    Y0,
-    t_eval=t_eval,
-    rtol=1e-3,
-    method='Radau',
-)
-print(f"Time Taken: {time.time()-start_time:.2f}")
-
-x_vals = solution.y[0]
-y_vals = solution.y[1]
-
-#------------------- Plotting -------------------
-
-num_plot_points = 100
-plt.figure(figsize=(8,6))
-for i in range(N):
-    x_vals = solution.y[i*4]
-    y_vals = solution.y[i*4+1]
-
-    indexs = np.linspace(0, len(x_vals)-1, num_plot_points, dtype=int)
-    x_plot = x_vals[indexs]
-    y_plot = y_vals[indexs]
-
-    plt.plot(x_plot, y_plot)
-
-plt.xlabel("x (m)")
-plt.ylabel("y (m)")
-plt.title("Trajectories of multiple particles")
-plt.xlim(0,1)
-plt.ylim(0,7)
-plt.grid(True)
-plt.show()
-'''
+particle_area = np.pi * particle_diameter**2 / 4
 
 #------------------- RK4 Solver -------------------
+
 def runge_kutta_4(f, Y0, t_span, dt):
     t0, t_end = t_span
     t_values = [t0]
@@ -154,9 +37,12 @@ def runge_kutta_4(f, Y0, t_span, dt):
     start_time = time.time()
     while t < t_end:
         frame += 1
+
+        if np.all(Y[0::4] <= 0) or np.all(Y[1::4] <= 0):
+            break
         
-        if frame % 1000 == 0:
-            print(f"Time: {time.time()-start_time:.2f}s / Frame: {frame} / Completion: {100 * t/t_end:.2f}%")
+        if frame % (simulation_time / dt / 100) == 0:
+            print(f"Time: {time.time()-start_time:.2f}s / Completion: {int(100 * t/t_end)}%")
         
         k1 = f(t, Y)
         k2 = f(t + dt/2, Y + dt/2 * k1)
@@ -171,31 +57,223 @@ def runge_kutta_4(f, Y0, t_span, dt):
     
     return np.array(t_values), np.array(Y_values)
 
+#------------------- Charge Density Functions -------------------
+
+'''
+CHARGE_DENSITY_X_CONST = 1
+CHARGE_DENSITY_Y_CONST = 3
+
+DECAY_X = 0.3
+DECAY_Y = 1
+
+def find_charge_density(x, y):
+    charge_density_x = CHARGE_DENSITY_X_CONST * np.exp(-(x) / DECAY_X)
+    charge_density_y = CHARGE_DENSITY_Y_CONST * np.exp(-(7-y) / DECAY_Y)
+    charge_density = charge_density_x + charge_density_y
+    return charge_density
+'''
+    
+CENTER_X = 0
+CENTER_Y = 7
+CONST_X = 4
+CONST_Y = 0.01
+PEAK_HEIGHT = 1
+DECAY = 0.5
+
+def find_charge_density(x, y):
+    return PEAK_HEIGHT * np.exp(-(CONST_X * (x - CENTER_X)**2 + CONST_Y * (y - CENTER_Y)**2) / (2 * DECAY**2))
+
+def electric_field_cloud(particle_x, particle_y, num_points=10):
+
+    y_vals_lower = np.linspace(0, particle_y, num_points)
+    y_vals_upper = np.linspace(particle_y, 7, num_points)
+
+    rho_lower_y = np.array([find_charge_density(particle_x, y) for y in y_vals_lower])
+    rho_upper_y = np.array([find_charge_density(particle_x, y) for y in y_vals_upper])
+    
+    integral_lower_y = np.trapz(rho_lower_y, y_vals_lower)
+    integral_upper_y = np.trapz(rho_upper_y, y_vals_upper)
+
+    electric_cloud_force_y = (particle_charge / (2 * EPSILON_0)) * (integral_lower_y - integral_upper_y)
+
+    x_vals_lower = np.linspace(0, particle_x, num_points)
+    x_vals_upper = np.linspace(particle_x, 1, num_points)
+    
+    rho_lower_x = np.array([find_charge_density(x, particle_y) for x in x_vals_lower])
+    rho_upper_x = np.array([find_charge_density(x, particle_y) for x in x_vals_upper])
+    
+    integral_lower_x = np.trapz(rho_lower_x, x_vals_lower)
+    integral_upper_x = np.trapz(rho_upper_x, x_vals_upper)
+
+    electric_cloud_force_x = (particle_charge / (2 * EPSILON_0)) * (integral_lower_x - integral_upper_x)
+
+    electric_cloud_force = np.array([electric_cloud_force_x, electric_cloud_force_y])
+
+    return electric_cloud_force
+
+#------------------- Simulation Function -------------------
+
+def particle_simulation(t, Y):
+    dYdt = np.zeros_like(Y)
+    for i in range(N):
+        
+        index = i*4
+        x, y, vx, vy = Y[index:index+4]
+
+        # prevent moving at x = 0
+        if x <= 0 or y <= 0:
+            dYdt[index:index+4] = [0, 0, 0, 0]
+            continue
+
+        velocity = np.array([vx, vy])
+        velocity_apparent = velocity - AIR_FLOW_DIRECTION
+        velocity_magnitude = np.linalg.norm(velocity_apparent) + 1e-12
+        
+        gravity_force = np.array([0, - particle_mass * GRAVITY])
+
+        buoyancy_force = np.array([0, AIR_DENSITY * particle_volume * GRAVITY])
+        
+        reynolds_number = max(AIR_DENSITY * particle_diameter * velocity_magnitude / AIR_VISCOSITY, 1e-12)
+        Cd = 24 / reynolds_number
+        drag_mag = 0.5 * AIR_DENSITY * Cd * particle_area * velocity_magnitude**2
+        drag_force = -drag_mag * velocity_apparent / velocity_magnitude
+        
+        electric_plate_force = np.array([- particle_charge * TOWER_CHARGE_DENSITY / (2 * EPSILON_0), 0])
+        
+        electric_cloud_force = 
+
+        total_force = gravity_force + buoyancy_force + drag_force + electric_plate_force
+        acceleration = total_force / particle_mass
+        
+        dYdt[index:index+4] = [vx, vy, acceleration[0], acceleration[1]]
+
+    return dYdt
+
+#------------------- Run -------------------
+
+Y0 = []
+N = 20 
+
+for i in range(N):
+    x0 = (i+1) / (N+1)
+    y0 = 7
+    vx0 = 0
+    vy0 = -0.66
+    Y0.extend([x0, y0, vx0, vy0])
+
+start_time = time.time()
+
+''''
+Y0 = [0.4, 7, 0, -0.66]
+N = 1
+'''
+
+Y0 = np.array(Y0)
+
 #------------------- Simulation Parameters -------------------
-simulation_time = 20
+
+simulation_time = 0.01
 dt = 0.0001
 
-#------------------- Run RK4 -------------------
 t_values, Y_values = runge_kutta_4(particle_simulation, Y0, (0, simulation_time), dt)
 
-#------------------- Plot Results -------------------
-import matplotlib.pyplot as plt
+hit_particles = []
 
-plt.figure(figsize=(8,6))
-num_plot_points = 2000
 for i in range(N):
     x_vals = Y_values[:, i*4]
-    y_vals = Y_values[:, i*4+1]
-    
-    indexs = np.linspace(0, len(x_vals)-1, num_plot_points, dtype=int)
-    plt.plot(x_vals[indexs], y_vals[indexs])
+    hit_particles.append(np.any(x_vals <= 0))
 
-print(y_vals)
+print("----------- Results -----------")
+print(f"Capture Rate: {(sum(hit_particles) / N) * 100}%")
 
-plt.xlabel("x (m)")
-plt.ylabel("y (m)")
-plt.title("Particle Trajectories")
-plt.xlim(0, 1)
-plt.ylim(0, 7)
-plt.grid(True)
-plt.show()
+#------------------- Plot Results -------------------
+
+from matplotlib.animation import FuncAnimation
+import matplotlib.pyplot as plt
+
+def animate_tragectory():
+    fig, ax = plt.subplots(figsize=(6,8))
+    ax.set_xlim(0,1)
+    ax.set_ylim(0,7)
+    ax.set_xlabel("x (m)")
+    ax.set_ylabel("y (m)")
+    ax.set_title("Particle Motion")
+
+    downsample = 100
+
+    lines = []
+    x_vals_anim_all = []
+    y_vals_anim_all = []
+
+    for i in range(N):
+        x_vals = Y_values[:, i*4][::downsample]
+        y_vals = Y_values[:, i*4+1][::downsample]
+        x_vals_anim_all.append(x_vals)
+        y_vals_anim_all.append(y_vals)
+        color = "green" if i in hit_particles else "red"
+        line, = ax.plot([], [], lw=2, color=color)
+        lines.append(line)
+
+    max_frames = max(len(x) for x in x_vals_anim_all)
+
+    def update(frame):
+        for i, line in enumerate(lines):
+            x_vals_anim = x_vals_anim_all[i]
+            y_vals_anim = y_vals_anim_all[i]
+            if frame < len(x_vals_anim):
+                line.set_data(x_vals_anim[:frame+1], y_vals_anim[:frame+1])
+        return lines
+
+    ani = FuncAnimation(
+        fig,
+        update,
+        frames=max_frames,
+        interval=10,
+        blit = True,
+    )
+
+    plt.show()
+
+def plot_tragectory():
+    fig2, ax2 = plt.subplots(figsize=(6,8))
+
+    ax2.set_xlim(0,1)
+    ax2.set_ylim(0,7)
+    ax2.set_xlabel("x (m)")
+    ax2.set_ylabel("y (m)")
+    ax2.set_title("Final Particle Trajectories")
+
+    for i in range(N):
+        x_vals = Y_values[:, i*4]
+        y_vals = Y_values[:, i*4+1]
+
+        color = "green" if i in hit_particles else "red"
+        ax2.plot(x_vals, y_vals, color=color, lw=2)
+
+    # draw tower wall
+    ax2.axvline(0, color='black', linewidth=2)
+
+    plt.show()
+
+def plot_charge_density():
+    fig3, ax3 = plt.subplots(figsize=(6,8))
+
+    ax3.set_xlim(0,1)
+    ax3.set_ylim(0,7)
+    ax3.set_xlabel("x (m)")
+    ax3.set_ylabel("y (m)")
+    ax3.set_title("Charge Density")
+
+    x = np.linspace(0.001, 1, 400)
+    y = np.linspace(0.001, 7, 400)
+    X, Y = np.meshgrid(x, y)
+    Z = find_charge_density(X, Y)
+
+    c = ax3.pcolormesh(X, Y, Z, shading='auto', cmap='viridis')
+    fig3.colorbar(c, ax=ax3, label="Charge Density")
+
+    plt.show()
+
+plot_charge_density()
+#animate_tragectory()
+plot_tragectory()
